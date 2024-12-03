@@ -16,18 +16,18 @@ func NewParcelStore(db *sql.DB) ParcelStore {
 
 func (s ParcelStore) Add(p Parcel) (int, error) {
 	if p.Address == "" {
-		return 0, errors.New("address cannot be empty")
+		return 0, errors.New("Адрес не может быть пустым")
 	}
 
 	query := `INSERT INTO parcel (client, status, address, created_at) 
               VALUES (?, ?, ?, ?)`
 	result, err := s.db.Exec(query, p.Client, p.Status, p.Address, p.CreatedAt)
 	if err != nil {
-		return 0, fmt.Errorf("failed to add parcel: %w", err)
+		return 0, fmt.Errorf("Не удалось добавить посылку: %w", err)
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("failed to retrieve last insert ID: %w", err)
+		return 0, fmt.Errorf("Не удалось получить идентификатор последней записи: %w", err)
 	}
 	return int(id), nil
 }
@@ -40,9 +40,9 @@ func (s ParcelStore) Get(number int) (Parcel, error) {
 	var p Parcel
 	err := row.Scan(&p.Number, &p.Client, &p.Status, &p.Address, &p.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return p, fmt.Errorf("parcel with number %d not found", number)
+		return p, fmt.Errorf("Посылка с номером %d не найдена", number)
 	} else if err != nil {
-		return p, fmt.Errorf("failed to retrieve parcel: %w", err)
+		return p, fmt.Errorf("Не удалось получить данные посылки: %w", err)
 	}
 	return p, nil
 }
@@ -52,7 +52,7 @@ func (s ParcelStore) GetByClient(client int) ([]Parcel, error) {
               FROM parcel WHERE client = ?`
 	rows, err := s.db.Query(query, client)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve parcels for client %d: %w", client, err)
+		return nil, fmt.Errorf("Не удалось получить посылки для клиента %d: %w", client, err)
 	}
 	defer rows.Close()
 
@@ -61,7 +61,7 @@ func (s ParcelStore) GetByClient(client int) ([]Parcel, error) {
 		var p Parcel
 		err = rows.Scan(&p.Number, &p.Client, &p.Status, &p.Address, &p.CreatedAt)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan parcel: %w", err)
+			return nil, fmt.Errorf("Ошибка при обработке данных посылки: %w", err)
 		}
 		parcels = append(parcels, p)
 	}
@@ -75,34 +75,34 @@ func (s ParcelStore) SetStatus(number int, status string) error {
 		ParcelStatusDelivered:  true,
 	}
 	if !validStatuses[status] {
-		return fmt.Errorf("invalid status: %s", status)
+		return fmt.Errorf("Некорректный статус: %s", status)
 	}
 
 	query := `UPDATE parcel SET status = ? WHERE number = ?`
 	_, err := s.db.Exec(query, status, number)
 	if err != nil {
-		return fmt.Errorf("failed to update status: %w", err)
+		return fmt.Errorf("Не удалось обновить статус: %w", err)
 	}
 	return nil
 }
 
 func (s ParcelStore) SetAddress(number int, address string) error {
 	if address == "" {
-		return errors.New("address cannot be empty")
+		return errors.New("Адрес не может быть пустым")
 	}
 
 	query := `UPDATE parcel SET address = ? 
               WHERE number = ? AND status = ?`
 	result, err := s.db.Exec(query, address, number, ParcelStatusRegistered)
 	if err != nil {
-		return fmt.Errorf("failed to update address: %w", err)
+		return fmt.Errorf("Не удалось обновить адрес: %w", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve rows affected: %w", err)
+		return fmt.Errorf("Не удалось получить количество обновлённых строк: %w", err)
 	}
 	if affected == 0 {
-		return errors.New("address update not allowed")
+		return errors.New("Изменение адреса невозможно, посылка уже в пути")
 	}
 	return nil
 }
@@ -111,14 +111,14 @@ func (s ParcelStore) Delete(number int) error {
 	query := `DELETE FROM parcel WHERE number = ? AND status = ?`
 	result, err := s.db.Exec(query, number, ParcelStatusRegistered)
 	if err != nil {
-		return fmt.Errorf("failed to delete parcel: %w", err)
+		return fmt.Errorf("Не удалось удалить посылку: %w", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve rows affected: %w", err)
+		return fmt.Errorf("Не удалось получить количество удалённых строк: %w", err)
 	}
 	if affected == 0 {
-		return errors.New("deletion not allowed")
+		return errors.New("Удаление невозможно, посылка уже в пути")
 	}
 	return nil
 }
