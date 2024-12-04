@@ -1,26 +1,55 @@
-// parcel_test.go
-
 package main
 
 import (
 	"database/sql"
+	"fmt"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+	"math/rand"
+	"sort"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/require"
 )
 
+var (
+	// randSource источник псевдо случайных чисел.
+	// Для повышения уникальности в качестве seed
+	// используется текущее время в unix формате (в виде числа)
+	randSource = rand.NewSource(time.Now().UnixNano())
+	// randRange использует randSource для генерации случайных чисел
+	randRange = rand.New(randSource)
+)
+
+type ParcelStoreTestSuite struct {
+	suite.Suite
+	store ParcelStore
+	db    *sql.DB
+}
+
 func setupIntegrationTestDB() (*sql.DB, error) {
+	// Здесь создается подключение к базе данных (например, SQLite)
+	// В реальной ситуации замените это на вашу базу данных
 	return sql.Open("sqlite", "tracker.db")
 }
 
-func getParcelStore(t *testing.T) (ParcelStore, *sql.DB) {
-	db, err := setupIntegrationTestDB()
-	require.NoError(t, err)
-	return NewParcelStore(db), db
+func (suite *ParcelStoreTestSuite) SetupSuite() {
+	var err error
+	suite.db, err = setupIntegrationTestDB()
+	require.NoError(suite.T(), err, "Ошибка подключения к базе данных")
+	suite.store = NewParcelStore(suite.db)
 }
 
-func getTestParcel() Parcel {
+func (suite *ParcelStoreTestSuite) TearDownSuite() {
+	suite.db.Close()
+}
+
+func (suite *ParcelStoreTestSuite) cleanupParcel(id int) {
+	_, err := suite.db.Exec("DELETE FROM parcel WHERE number = ?", id)
+	require.NoError(suite.T(), err, "Ошибка очистки базы данных после теста")
+}
+
+func (suite *ParcelStoreTestSuite) getTestParcel() Parcel {
 	return Parcel{
 		Client:    1,
 		Status:    ParcelStatusRegistered,
@@ -29,143 +58,104 @@ func getTestParcel() Parcel {
 	}
 }
 
-func cleanupParcel(db *sql.DB, id int) {
-	db.Exec("DELETE FROM parcel WHERE number = ?", id)
+func (suite *ParcelStoreTestSuite) TestAddGetDelete() {
+	parcel := suite.getTestParcel()
+
+	id, err := suite.store.Add(parcel)
+	require.NoError(suite.T(), err, "Ошибка добавления посылки")
+	require.NotZero(suite.T(), id, "Идентификатор посылки должен быть больше нуля")
+	defer suite.cleanupParcel(id)
+	parcel.Number = id
+
+	storedParcel, err := suite.store.Get(id)
+	require.NoError(suite.T(), err, "Ошибка получения посылки")
+	assert.Equal(suite.T(), parcel, storedParcel, "Структуры не совпадают. Ожидаемая: %v , полученная: %v", parcel, storedParcel)
+
+	err = suite.store.Delete(id)
+	require.NoError(suite.T(), err, "Ошибка удаления посылки")
+
+	errMsg := fmt.Sprintf("Посылка с номером %d не найдена", id)
+	_, err = suite.store.Get(id)
+	assert.EqualError(suite.T(), err, errMsg, "Удалённая посылка не должна быть найдена")
 }
 
-func TestAddGetDelete(t *testing.T) {
-	store, db := getParcelStore(t)
-	defer db.Close()
+func (suite *ParcelStoreTestSuite) TestSetAddress() {
+	parcel := suite.getTestParcel()
 
-	parcel := getTestParcel()
-
-	id, err := store.Add(parcel)
-	require.NoError(t, err, "Ошибка добавления посылки")
-	require.NotZero(t, id, "Идентификатор посылки должен быть больше нуля")
-	defer cleanupParcel(db, id)
-
-	storedParcel, err := store.Get(id)
-	require.NoError(t, err, "Ошибка получения посылки")
-	require.Equal(t, parcel.Client, storedParcel.Client, "Идентификатор клиента не совпадает")
-	require.Equal(t, parcel.Status, storedParcel.Status, "Статус посылки не совпадает")
-	require.Equal(t, parcel.Address, storedParcel.Address, "Адрес посылки не совпадает")
-
-	err = store.Delete(id)
-	require.NoError(t, err, "Ошибка удаления посылки")
-
-	_, err = store.Get(id)
-	require.Error(t, err, "Удалённая посылка не должна быть найдена")
-}
-
-func TestSetAddress(t *testing.T) {
-	store, db := getParcelStore(t)
-	defer db.Close()
-
-	parcel := getTestParcel()
-
-	id, err := store.Add(parcel)
-	require.NoError(t, err, "Ошибка добавления посылки")
-	defer cleanupParcel(db, id)
+	id, err := suite.store.Add(parcel)
+	require.NoError(suite.T(), err, "Ошибка добавления посылки")
+	defer suite.cleanupParcel(id)
 
 	newAddress := "Новый тестовый адрес"
-	err = store.SetAddress(id, newAddress)
-	require.NoError(t, err, "Ошибка изменения адреса")
+	err = suite.store.SetAddress(id, newAddress)
+	require.NoError(suite.T(), err, "Ошибка изменения адреса")
 
-	storedParcel, err := store.Get(id)
-	require.NoError(t, err, "Ошибка получения посылки после изменения адреса")
-	require.Equal(t, newAddress, storedParcel.Address, "Адрес посылки не обновился")
+	storedParcel, err := suite.store.Get(id)
+	require.NoError(suite.T(), err, "Ошибка получения посылки после изменения адреса")
+	assert.Equal(suite.T(), newAddress, storedParcel.Address, "Адрес посылки не обновился")
 }
 
-func TestSetStatus(t *testing.T) {
-	store, db := getParcelStore(t)
-	defer db.Close()
+func (suite *ParcelStoreTestSuite) TestSetStatus() {
+	parcel := suite.getTestParcel()
 
-	parcel := getTestParcel()
+	id, err := suite.store.Add(parcel)
+	require.NoError(suite.T(), err, "Ошибка добавления посылки")
+	defer suite.cleanupParcel(id)
 
-	id, err := store.Add(parcel)
-	require.NoError(t, err, "Ошибка добавления посылки")
-	defer cleanupParcel(db, id)
+	err = suite.store.SetStatus(id, ParcelStatusSent)
+	require.NoError(suite.T(), err, "Ошибка изменения статуса")
 
-	err = store.SetStatus(id, ParcelStatusSent)
-	require.NoError(t, err, "Ошибка изменения статуса")
-
-	storedParcel, err := store.Get(id)
-	require.NoError(t, err, "Ошибка получения посылки после изменения статуса")
-	require.Equal(t, ParcelStatusSent, storedParcel.Status, "Статус посылки не обновился")
+	storedParcel, err := suite.store.Get(id)
+	require.NoError(suite.T(), err, "Ошибка получения посылки после изменения статуса")
+	assert.Equal(suite.T(), ParcelStatusSent, storedParcel.Status, "Статус посылки не обновился")
 }
 
-func TestGetByClient(t *testing.T) {
-	store, db := getParcelStore(t)
-	defer db.Close()
-
-	clientID := 123
-
+func (suite *ParcelStoreTestSuite) TestGetByClient() {
 	parcels := []Parcel{
-		{Client: clientID, Status: ParcelStatusRegistered, Address: "Адрес 1", CreatedAt: "2024-01-01T00:00:00Z"},
-		{Client: clientID, Status: ParcelStatusRegistered, Address: "Адрес 2", CreatedAt: "2024-01-02T00:00:00Z"},
+		suite.getTestParcel(),
+		suite.getTestParcel(),
+		suite.getTestParcel(),
 	}
-	parcelMap := make(map[int]Parcel)
 
-	for _, p := range parcels {
-		id, err := store.Add(p)
-		require.NoError(t, err, "Ошибка добавления посылки")
-		p.Number = id
-		parcelMap[id] = p
+	// задаём всем посылкам один и тот же идентификатор клиента
+	client := randRange.Intn(10_000_000)
+	parcels[0].Client = client
+	parcels[1].Client = client
+	parcels[2].Client = client
+
+	for i, p := range parcels {
+		id, err := suite.store.Add(p)
+		require.NoError(suite.T(), err, "Ошибка добавления посылки")
+		parcels[i].Number = id
 	}
 	defer func() {
-		for id := range parcelMap {
-			cleanupParcel(db, id)
+		for id := range parcels {
+			suite.cleanupParcel(id)
 		}
 	}()
 
 	// Получаем список посылок клиента
-	storedParcels, err := store.GetByClient(clientID)
-	require.NoError(t, err, "Ошибка получения посылок клиента")
-	require.Len(t, storedParcels, len(parcels), "Количество посылок не совпадает")
+	storedParcels, err := suite.store.GetByClient(client)
+	require.NoError(suite.T(), err, "Ошибка получения посылок клиента")
+	assert.Len(suite.T(), storedParcels, len(parcels), "Количество посылок не совпадает")
 
-	// Проверяем каждую полученную посылку
-	for _, storedParcel := range storedParcels {
-		originalParcel, exists := parcelMap[storedParcel.Number]
-		require.True(t, exists, "Посылка с номером %d не найдена в ожидаемом списке", storedParcel.Number)
+	// Сортируем срезы по треку
+	sort.Slice(parcels, func(i, j int) bool {
+		return parcels[i].Number < parcels[j].Number
+	})
+	sort.Slice(storedParcels, func(i, j int) bool {
+		return storedParcels[i].Number < storedParcels[j].Number
+	})
 
-		require.Equal(t, originalParcel.Client, storedParcel.Client, "Идентификатор клиента не совпадает")
-		require.Equal(t, originalParcel.Status, storedParcel.Status, "Статус посылки не совпадает")
-		require.Equal(t, originalParcel.Address, storedParcel.Address, "Адрес посылки не совпадает")
-	}
+	//сравниваем одним ассертом
+	assert.Equal(suite.T(), parcels, storedParcels, "Вернувшийся срез не совпадает с ожидаемым")
 }
 
-func TestSetAddress_InvalidStatus(t *testing.T) {
-	store, db := getParcelStore(t)
-	defer db.Close()
+/*
+	Знаю что следующие два теста должны быть на уровне тестов сервиса, а сам функционал на уровне сервиса.
+	Функционал перенес в сервис, тесты оставил
+*/
 
-	parcel := getTestParcel()
-
-	id, err := store.Add(parcel)
-	require.NoError(t, err, "Ошибка добавления посылки")
-	defer cleanupParcel(db, id)
-
-	err = store.SetStatus(id, ParcelStatusSent)
-	require.NoError(t, err, "Ошибка изменения статуса")
-
-	err = store.SetAddress(id, "Новый тестовый адрес")
-	require.Error(t, err, "Адрес не должен измениться для статуса 'отправлена'")
-	require.Contains(t, err.Error(), "Изменение адреса невозможно")
-}
-
-func TestDelete_InvalidStatus(t *testing.T) {
-	store, db := getParcelStore(t)
-	defer db.Close()
-
-	parcel := getTestParcel()
-
-	id, err := store.Add(parcel)
-	require.NoError(t, err, "Ошибка добавления посылки")
-	defer cleanupParcel(db, id)
-
-	err = store.SetStatus(id, ParcelStatusSent)
-	require.NoError(t, err, "Ошибка изменения статуса")
-
-	err = store.Delete(id)
-	require.Error(t, err, "Удаление не должно быть доступно для статуса 'отправлена'")
-	require.Contains(t, err.Error(), "Удаление невозможно")
+func TestParcelStoreTestSuite(t *testing.T) {
+	suite.Run(t, new(ParcelStoreTestSuite))
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -32,6 +33,10 @@ func NewParcelService(store ParcelStore) ParcelService {
 }
 
 func (s ParcelService) Register(client int, address string) (Parcel, error) {
+	if address == "" {
+		return Parcel{}, errors.New("Адрес не может быть пустым")
+	}
+
 	parcel := Parcel{
 		Client:    client,
 		Status:    ParcelStatusRegistered,

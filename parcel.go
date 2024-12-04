@@ -15,10 +15,6 @@ func NewParcelStore(db *sql.DB) ParcelStore {
 }
 
 func (s ParcelStore) Add(p Parcel) (int, error) {
-	if p.Address == "" {
-		return 0, errors.New("Адрес не может быть пустым")
-	}
-
 	query := `INSERT INTO parcel (client, status, address, created_at) 
               VALUES (?, ?, ?, ?)`
 	result, err := s.db.Exec(query, p.Client, p.Status, p.Address, p.CreatedAt)
@@ -39,11 +35,14 @@ func (s ParcelStore) Get(number int) (Parcel, error) {
 
 	var p Parcel
 	err := row.Scan(&p.Number, &p.Client, &p.Status, &p.Address, &p.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return p, fmt.Errorf("Посылка с номером %d не найдена", number)
-	} else if err != nil {
-		return p, fmt.Errorf("Не удалось получить данные посылки: %w", err)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Parcel{}, fmt.Errorf("Посылка с номером %d не найдена", number)
+		}
+		return Parcel{}, fmt.Errorf("Не удалось получить данные посылки: %w", err)
 	}
+
 	return p, nil
 }
 
@@ -65,19 +64,16 @@ func (s ParcelStore) GetByClient(client int) ([]Parcel, error) {
 		}
 		parcels = append(parcels, p)
 	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("Ошибка при обработке данных посылки: %w", err)
+	}
+
 	return parcels, nil
 }
 
 func (s ParcelStore) SetStatus(number int, status string) error {
-	validStatuses := map[string]bool{
-		ParcelStatusRegistered: true,
-		ParcelStatusSent:       true,
-		ParcelStatusDelivered:  true,
-	}
-	if !validStatuses[status] {
-		return fmt.Errorf("Некорректный статус: %s", status)
-	}
-
 	query := `UPDATE parcel SET status = ? WHERE number = ?`
 	_, err := s.db.Exec(query, status, number)
 	if err != nil {
